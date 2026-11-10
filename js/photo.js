@@ -18,22 +18,60 @@ export function takePhoto(facing = 'environment') {
   });
 }
 
-async function shrink(file, max = 1600) {
+// Fotos werden vor dem Hochladen verkleinert und komprimiert:
+// längste Seite höchstens 1280 px, JPEG, Ziel unter 250 KB (Obergrenze im Bucket: 1 MB).
+const MAX_SIDE = 1280;
+const TARGET_BYTES = 250 * 1024;
+const LIMIT_BYTES = 1024 * 1024;
+
+async function decode(file) {
   try {
-    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
-    const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
-    const c = document.createElement('canvas');
-    c.width = Math.round(bmp.width * scale);
-    c.height = Math.round(bmp.height * scale);
-    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-    return await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.82));
+    return await createImageBitmap(file, { imageOrientation: 'from-image' });
   } catch {
-    return file;   // älterer Browser: Original hochladen
+    // ältere Browser: über ein <img> dekodieren
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      return img;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   }
 }
 
+const toJpeg = (canvas, q) => new Promise((r) => canvas.toBlob(r, 'image/jpeg', q));
+
+async function shrink(file) {
+  const src = await decode(file);
+  const w0 = src.width || src.naturalWidth;
+  const h0 = src.height || src.naturalHeight;
+  let side = MAX_SIDE;
+  let best = null;
+  for (let pass = 0; pass < 3; pass++) {
+    const scale = Math.min(1, side / Math.max(w0, h0));
+    const c = document.createElement('canvas');
+    c.width = Math.round(w0 * scale);
+    c.height = Math.round(h0 * scale);
+    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+    for (const q of [0.72, 0.6, 0.5, 0.4]) {
+      best = await toJpeg(c, q);
+      if (best && best.size <= TARGET_BYTES) return best;
+    }
+    side = Math.round(side * 0.75);   // immer noch zu groß: kleiner rechnen
+  }
+  return best;
+}
+
 export async function uploadPhoto(gameId, file) {
-  const blob = await shrink(file);
+  let blob;
+  try {
+    blob = await shrink(file);
+  } catch {
+    throw new Error('Das Foto konnte nicht verkleinert werden. Bitte nochmal aufnehmen.');
+  }
+  if (!blob || blob.size > LIMIT_BYTES) throw new Error('Das Foto ist zu groß. Bitte nochmal aufnehmen.');
   const path = `${gameId}/${crypto.randomUUID()}.jpg`;
   const { error } = await sb.storage.from('photos').upload(path, blob, { contentType: 'image/jpeg', upsert: false });
   if (error) throw new Error('Foto-Upload fehlgeschlagen: ' + error.message);

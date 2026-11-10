@@ -9,3 +9,8 @@ Statische PWA (HTML/CSS/JS-Module ohne Build), ausgeliefert über GitHub Pages v
   Manifest `background_color`/`theme_color` (#ff6b35); `body` ist `position: fixed; inset: 0`, gescrollt wird nur in `<main>`;
   die Kopfleiste ist `position: fixed`, voll breit, einfarbig deckend. Kein sticky Header über scrollendem Dokument,
   keine Transparenz/Blur an der oberen Kante – sonst blendet iOS einen verwaschenen Verlauf ein.
+- Aufräumen: Edge Function `supabase/functions/cleanup-old-games` löscht täglich (pg_cron-Job `hideseek-cleanup`, 03:17 UTC)
+  Spiele, deren letzte Aktivität älter als 7 Tage ist, samt Fotos; Foto-Ordner ohne Spiel ebenfalls.
+- Fotos werden in `js/photo.js` vor dem Upload auf max. 1280 px und unter ~250 KB gebracht; Bucket-Limit 1 MB.
+- Funktionen mit `delete` lösen in Supabase eine Bestätigung aus, die die App des Nutzers abbricht.
+  Standorte daher nur über `hs._clear_positions` löschen; neue Löschbefehle als SQL für den SQL Editor ausgeben.

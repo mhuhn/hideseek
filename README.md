@@ -20,7 +20,8 @@ Läuft über GitHub Pages: <https://mhuhn.github.io/hideseek/>
 - Backend: [Supabase](https://supabase.com) mit PostGIS. Anmeldung anonym.
   - Alle Tabellen haben RLS ohne Policies – Clients lesen nur über `get_state()` / `get_field()` und schreiben nur über RPC-Funktionen, die die Regeln prüfen. Seeker sehen die Position der Hider nie.
   - Zeitabhängige Übergänge (Versteckzeit, Antwortzeit, Blockade-Timer, Beginn des Endspiels) erledigt `_tick()` bei jeder Abfrage; die App fragt alle 3 Sekunden ab.
-  - Fotos liegen im privaten Storage-Bucket `photos`, Ordner = Spiel-ID.
+  - Fotos liegen im privaten Storage-Bucket `photos`, Ordner = Spiel-ID. Die App verkleinert sie vor dem Upload (max. 1280 px, unter ~250 KB).
+  - Spiele, deren letzte Aktivität älter als 7 Tage ist, löscht die Edge Function `cleanup-old-games` täglich samt Fotos (pg_cron).
 
 ```
 index.html, manifest.webmanifest, sw.js
