@@ -13,6 +13,9 @@
 
 create extension if not exists postgis with schema extensions;
 
+-- Interne Hilfsfunktionen liegen im Schema hs, das die API nicht anbietet.
+create schema if not exists hs;
+
 -- -----------------------------------------------------------------------------
 -- Tabellen
 -- -----------------------------------------------------------------------------
@@ -163,6 +166,7 @@ create index blockades_round_idx on public.blockades (round_id, party_id);
 
 -- -----------------------------------------------------------------------------
 -- RLS: an, aber ohne Policies -> kein direkter Tabellenzugriff für Clients
+-- (ohne Policy liefert eine Tabelle für anon/authenticated keine Zeilen)
 -- -----------------------------------------------------------------------------
 
 alter table public.games       enable row level security;
@@ -176,15 +180,13 @@ alter table public.round_coins enable row level security;
 alter table public.questions   enable row level security;
 alter table public.blockades   enable row level security;
 
-revoke all on all tables    in schema public from anon, authenticated;
-revoke all on all sequences in schema public from anon, authenticated;
 
 -- -----------------------------------------------------------------------------
 -- Hilfsfunktionen
 -- -----------------------------------------------------------------------------
 
 -- Entfernung in Metern (Haversine)
-create or replace function public._dist(lat1 double precision, lng1 double precision,
+create or replace function hs._dist(lat1 double precision, lng1 double precision,
                                         lat2 double precision, lng2 double precision)
 returns double precision language sql immutable set search_path = '' as $$
   select 2 * 6371008.8 * asin(sqrt(
@@ -192,12 +194,12 @@ returns double precision language sql immutable set search_path = '' as $$
     cos(radians(lat1)) * cos(radians(lat2)) * power(sin(radians(lng2 - lng1) / 2), 2)));
 $$;
 
-create or replace function public._pt(p_lat double precision, p_lng double precision)
+create or replace function hs._pt(p_lat double precision, p_lng double precision)
 returns extensions.geometry language sql immutable set search_path = '' as $$
   select extensions.st_setsrid(extensions.st_makepoint(p_lng, p_lat), 4326);
 $$;
 
-create or replace function public._geom(p jsonb)
+create or replace function hs._geom(p jsonb)
 returns extensions.geometry language sql immutable set search_path = '' as $$
   select extensions.st_multi(extensions.st_collectionextract(extensions.st_makevalid(
            extensions.st_setsrid(extensions.st_geomfromgeojson(p::text), 4326)), 3));
@@ -209,13 +211,13 @@ returns boolean language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.players where game_id = p_game and user_id = auth.uid());
 $$;
 
-create or replace function public._window_open(g public.games)
+create or replace function hs._window_open(g public.games)
 returns boolean language sql stable set search_path = '' as $$
   select (g.earliest_at is null or now() >= g.earliest_at)
      and (g.latest_at   is null or now() <= g.latest_at);
 $$;
 
-create or replace function public._question_category(p_key text)
+create or replace function hs._question_category(p_key text)
 returns text language sql immutable set search_path = '' as $$
   select case
     when p_key in ('ns', 'ew', 'district', 'place1', 'place2', 'place3', 'place4') then 'relativ'
@@ -226,19 +228,19 @@ returns text language sql immutable set search_path = '' as $$
   end;
 $$;
 
-create or replace function public._question_cost(p_category text)
+create or replace function hs._question_cost(p_category text)
 returns int language sql immutable set search_path = '' as $$
   select case p_category when 'relativ' then 7 when 'entfernung' then 6
                          when 'endspiel' then 3 when 'foto' then 3 end;
 $$;
 
-create or replace function public._is_photo_question(p_key text)
+create or replace function hs._is_photo_question(p_key text)
 returns boolean language sql immutable set search_path = '' as $$
   select p_key in ('selfie', 'photo_up', 'photo_down', 'tallest', 'buildings5', 'trees5', 'stop', 'restaurant');
 $$;
 
 -- Aktuelle Position des Hider-Teams: jüngste Position eines Mitglieds, sonst Versteck
-create or replace function public._hider_pos(p_round uuid, out lat double precision, out lng double precision)
+create or replace function hs._hider_pos(p_round uuid, out lat double precision, out lng double precision)
 language plpgsql stable security definer set search_path = '' as $$
 declare r public.rounds;
 begin
@@ -250,14 +252,14 @@ begin
   if lat is null then lat := r.hide_lat; lng := r.hide_lng; end if;
 end $$;
 
-create or replace function public._district_at(p_game text, p_lat double precision, p_lng double precision)
+create or replace function hs._district_at(p_game text, p_lat double precision, p_lng double precision)
 returns text language sql stable security definer set search_path = '' as $$
   select name from public.districts
-   where game_id = p_game and extensions.st_contains(geom, public._pt(p_lat, p_lng))
+   where game_id = p_game and extensions.st_contains(geom, hs._pt(p_lat, p_lng))
    limit 1;
 $$;
 
-create or replace function public._new_round(p_game text, p_hider uuid)
+create or replace function hs._new_round(p_game text, p_hider uuid)
 returns uuid language plpgsql security definer set search_path = '' as $$
 declare v_round uuid; v_num int;
 begin
@@ -271,7 +273,7 @@ begin
 end $$;
 
 -- Zeitabhängige Übergänge
-create or replace function public._tick(p_game text)
+create or replace function hs._tick(p_game text)
 returns void language plpgsql security definer set search_path = '' as $$
 declare
   g     public.games;
@@ -287,7 +289,7 @@ begin
 
   -- Versteckzeit abgelaufen: Position nach genau der Versteckzeit wird Versteck
   if r.status = 'hiding' and now() >= r.hide_deadline then
-    select lat, lng into v_lat, v_lng from public._hider_pos(r.id);
+    select lat, lng into v_lat, v_lng from hs._hider_pos(r.id);
     if v_lat is not null then
       update public.rounds
          set hide_lat = v_lat, hide_lng = v_lng, status = 'seeking', seeking_started_at = r.hide_deadline
@@ -327,7 +329,7 @@ begin
       select 1 from public.positions pos join public.players pl on pl.id = pos.player_id
        where pl.game_id = p_game and pl.party_id is not null and pl.party_id <> r.hider_party_id
          and pos.updated_at >= r.seeking_started_at
-         and public._dist(pos.lat, pos.lng, r.hide_lat, r.hide_lng) <= g.zone_radius_m)
+         and hs._dist(pos.lat, pos.lng, r.hide_lat, r.hide_lng) <= g.zone_radius_m)
     then
       update public.rounds set endgame_at = now() where id = r.id;
     end if;
@@ -335,7 +337,7 @@ begin
 end $$;
 
 -- Blockaden-Wert anwenden: 1 = nichts, 2 = Auswahl-Marke, 11 = Bonus-Wurf
-create or replace function public._apply_value(p_blockade uuid)
+create or replace function hs._apply_value(p_blockade uuid)
 returns void language plpgsql security definer set search_path = '' as $$
 declare b public.blockades; d1 int; d2 int;
 begin
@@ -376,7 +378,7 @@ begin
   return jsonb_build_object(
     'found', true, 'id', g.id, 'title', g.title, 'status', g.status,
     'earliest_at', g.earliest_at, 'latest_at', g.latest_at,
-    'open', public._window_open(g),
+    'open', hs._window_open(g),
     'joined', public.is_member(g.id),
     'full', (select count(*) from public.players where game_id = g.id and plays) >= g.max_players);
 end $$;
@@ -405,7 +407,7 @@ begin
   select * into me from public.players where game_id = p_game and user_id = auth.uid();
   if me.id is null then raise exception 'Du bist in diesem Spiel nicht angemeldet'; end if;
 
-  perform public._tick(p_game);
+  perform hs._tick(p_game);
 
   select * into g from public.games where id = p_game;
   select * into r from public.rounds where game_id = p_game order by number desc limit 1;
@@ -511,11 +513,8 @@ begin
     end if;
   end loop;
 
-  -- alte Spiele aufräumen
-  delete from public.games where created_at < now() - interval '30 days';
-
-  select extensions.st_union(public._geom(e)) into v_field from jsonb_array_elements(p->'add') e;
-  select extensions.st_union(public._geom(e)) into v_cut
+  select extensions.st_union(hs._geom(e)) into v_field from jsonb_array_elements(p->'add') e;
+  select extensions.st_union(hs._geom(e)) into v_cut
     from jsonb_array_elements(coalesce(p->'cut', '[]'::jsonb)) e;
   if v_cut is not null then v_field := extensions.st_difference(v_field, v_cut); end if;
   v_field := extensions.st_multi(extensions.st_collectionextract(extensions.st_makevalid(v_field), 3));
@@ -542,13 +541,14 @@ begin
           nullif(btrim(coalesce(p->>'landmark', '')), ''),
           v_field);
 
+  -- nur Stadtteile speichern, die das Spielfeld berühren
   insert into public.districts (game_id, name, geom)
-  select v_id, coalesce(nullif(btrim(d->>'name'), ''), 'Unbenannt'), public._geom(d->'geometry')
-    from jsonb_array_elements(coalesce(p->'districts', '[]'::jsonb)) d
-   where jsonb_typeof(d->'geometry') = 'object'
-   limit 300;
-  delete from public.districts
-   where game_id = v_id and (extensions.st_isempty(geom) or not extensions.st_intersects(geom, v_field));
+  select v_id, x.name, x.geom
+    from (select coalesce(nullif(btrim(d->>'name'), ''), 'Unbenannt') as name, hs._geom(d->'geometry') as geom
+            from jsonb_array_elements(coalesce(p->'districts', '[]'::jsonb)) d
+           where jsonb_typeof(d->'geometry') = 'object'
+           limit 300) x
+   where not extensions.st_isempty(x.geom) and extensions.st_intersects(x.geom, v_field);
 
   insert into public.players (game_id, user_id, name, plays)
   values (v_id, auth.uid(), v_name, coalesce((p->>'plays')::boolean, true));
@@ -571,7 +571,7 @@ begin
   end if;
 
   if g.status <> 'lobby' then raise exception 'Das Spiel hat schon begonnen'; end if;
-  if not public._window_open(g) then raise exception 'Das Spiel ist gerade nicht geöffnet'; end if;
+  if not hs._window_open(g) then raise exception 'Das Spiel ist gerade nicht geöffnet'; end if;
   if (select count(*) from public.players where game_id = g.id and plays) >= g.max_players then
     raise exception 'Das Spiel ist schon voll';
   end if;
@@ -610,7 +610,7 @@ begin
   select * into g from public.games where id = p_game for update;
   if g.id is null or g.admin_id <> auth.uid() then raise exception 'Nur der Spielleiter kann das Spiel starten'; end if;
   if g.status <> 'lobby' then raise exception 'Das Spiel läuft schon'; end if;
-  if not public._window_open(g) then raise exception 'Das Spiel ist gerade nicht geöffnet'; end if;
+  if not hs._window_open(g) then raise exception 'Das Spiel ist gerade nicht geöffnet'; end if;
 
   select count(*) into v_n from public.players where game_id = p_game and plays;
   if v_n < g.min_players then raise exception 'Es fehlen noch Spieler (mindestens %)', g.min_players; end if;
@@ -652,7 +652,7 @@ begin
   end if;
 
   update public.games set status = 'playing', team_mode = v_teams, started_at = now() where id = p_game;
-  perform public._new_round(p_game, (select id from public.parties where game_id = p_game order by random() limit 1));
+  perform hs._new_round(p_game, (select id from public.parties where game_id = p_game order by random() limit 1));
 end $$;
 
 create or replace function public.end_game(p_game text)
@@ -716,7 +716,7 @@ begin
   if me.party_id is distinct from r.hider_party_id then raise exception 'Nur die Hider bestätigen ihr Versteck'; end if;
   if r.status <> 'hiding' then raise exception 'Die Versteckzeit ist schon vorbei'; end if;
   if p_lat is null or p_lng is null then raise exception 'Dein Standort ist unbekannt'; end if;
-  if not extensions.st_dwithin(g.field::extensions.geography, public._pt(p_lat, p_lng)::extensions.geography, 25) then
+  if not extensions.st_dwithin(g.field::extensions.geography, hs._pt(p_lat, p_lng)::extensions.geography, 25) then
     raise exception 'Ihr seid außerhalb des Spielfelds';
   end if;
 
@@ -737,7 +737,7 @@ declare
   r       public.rounds;
   g       public.games;
   me      public.players;
-  v_cat   text := public._question_category(p_key);
+  v_cat   text := hs._question_category(p_key);
   v_cost  int;
   v_last  timestamptz;
   v_hlat  double precision;
@@ -749,7 +749,7 @@ declare
   v_b     text;
   q       public.questions;
 begin
-  perform public._tick((select game_id from public.rounds where id = p_round));
+  perform hs._tick((select game_id from public.rounds where id = p_round));
   select * into r from public.rounds where id = p_round for update;
   select * into g from public.games where id = r.game_id;
   select * into me from public.players where game_id = r.game_id and user_id = auth.uid();
@@ -760,7 +760,7 @@ begin
   if r.status <> 'seeking' then raise exception 'Gerade können keine Fragen gestellt werden'; end if;
   if v_cat is null then raise exception 'Unbekannte Frage'; end if;
   if p_lat is null or p_lng is null then raise exception 'Dein Standort ist unbekannt'; end if;
-  v_cost := public._question_cost(v_cat);
+  v_cost := hs._question_cost(v_cat);
 
   if exists (select 1 from public.blockades
               where round_id = r.id and party_id = me.party_id and status = 'active') then
@@ -794,9 +794,9 @@ begin
   -- Fragen, die die App selbst beantwortet
   if p_key in ('ns', 'ew', 'district', 'place1', 'place2', 'place3', 'place4',
                'd1000', 'd500', 'd300', 'd150', 'd75', 'd30', 'dist25') then
-    select lat, lng into v_hlat, v_hlng from public._hider_pos(r.id);
+    select lat, lng into v_hlat, v_hlng from hs._hider_pos(r.id);
     if v_hlat is null then raise exception 'Die Position der Hider ist noch unbekannt'; end if;
-    v_d := public._dist(p_lat, p_lng, v_hlat, v_hlng);
+    v_d := hs._dist(p_lat, p_lng, v_hlat, v_hlng);
 
     v_ans := case
       when p_key = 'ns' then case when v_hlat >= p_lat then 'Nördlich von euch' else 'Südlich von euch' end
@@ -806,13 +806,13 @@ begin
       when p_key = 'dist25' then 'Etwa ' || (round(v_d / 25) * 25)::int || ' m'
     end;
     if p_key = 'district' then
-      v_a := public._district_at(g.id, p_lat, p_lng);
-      v_b := public._district_at(g.id, v_hlat, v_hlng);
+      v_a := hs._district_at(g.id, p_lat, p_lng);
+      v_b := hs._district_at(g.id, v_hlat, v_hlng);
       v_ans := case when v_a is not null and v_a = v_b then 'Ja' else 'Nein' end;
     elsif p_key like 'place_' then
       v_ans := case
-        when public._dist(p_lat, p_lng, (v_place->>'lat')::float8, (v_place->>'lng')::float8)
-           < public._dist(v_hlat, v_hlng, (v_place->>'lat')::float8, (v_place->>'lng')::float8)
+        when hs._dist(p_lat, p_lng, (v_place->>'lat')::float8, (v_place->>'lng')::float8)
+           < hs._dist(v_hlat, v_hlng, (v_place->>'lat')::float8, (v_place->>'lng')::float8)
         then 'Ja – ihr seid näher an ' || (v_place->>'name') || ' als wir'
         else 'Nein – wir sind näher an ' || (v_place->>'name') || ' als ihr'
       end;
@@ -873,7 +873,7 @@ begin
   if r.status <> 'seeking' then raise exception 'Die Suchphase ist vorbei'; end if;
   if now() > q.deadline + interval '15 seconds' then raise exception 'Die Antwortzeit ist abgelaufen'; end if;
 
-  if public._is_photo_question(q.qkey) then
+  if hs._is_photo_question(q.qkey) then
     if p_path is null or p_path not like q.game_id || '/%' then raise exception 'Bitte macht ein Foto'; end if;
   elsif coalesce(btrim(p_text), '') = '' then
     raise exception 'Bitte gebt eine Antwort ein';
@@ -937,7 +937,7 @@ begin
     insert into public.blockades (round_id, game_id, party_id, dice, rolls, value, status)
     values (r.id, r.game_id, p_party, p_dice, v_rolls, v_sum, 'held')
     returning * into b;
-    perform public._apply_value(b.id);
+    perform hs._apply_value(b.id);
     select * into b from public.blockades where id = b.id;
   end if;
 
@@ -955,7 +955,7 @@ begin
   if b.status <> 'choosing' then raise exception 'Hier gibt es nichts mehr zu wählen'; end if;
   if not (p_value = any (b.options)) then raise exception 'Diese Zahl steht nicht zur Wahl'; end if;
   update public.blockades set value = p_value, status = 'held' where id = b.id;
-  perform public._apply_value(b.id);
+  perform hs._apply_value(b.id);
   select * into b from public.blockades where id = p_blockade;
   return to_jsonb(b) - 'round_id' - 'game_id';
 end $$;
@@ -1046,7 +1046,7 @@ begin
   else
     v_next := me.party_id;
   end if;
-  perform public._new_round(r.game_id, v_next);
+  perform hs._new_round(r.game_id, v_next);
 end $$;
 
 -- -----------------------------------------------------------------------------
@@ -1063,10 +1063,9 @@ create policy "hideseek photos select" on storage.objects for select to authenti
   using (bucket_id = 'photos' and public.is_member((storage.foldername(name))[1]));
 
 -- -----------------------------------------------------------------------------
--- Rechte: nur die öffentlichen RPCs für angemeldete (auch anonyme) Nutzer
+-- Rechte: die öffentlichen RPCs für angemeldete (auch anonyme) Nutzer.
+-- Interne Funktionen liegen in hs und sind über die API nicht erreichbar.
 -- -----------------------------------------------------------------------------
-
-revoke execute on all functions in schema public from public, anon, authenticated;
 
 grant execute on function
   public.is_member(text),
@@ -1090,3 +1089,17 @@ grant execute on function
   public.complete_blockade(uuid, text),
   public.report_found(uuid, text)
 to authenticated;
+
+-- Nicht angemeldete Aufrufer (anon) brauchen die Spiel-Funktionen nicht.
+-- Angemeldete Spieler – auch anonyme – behalten den Zugriff über die Grants.
+revoke execute on function
+  public.is_member(text), public.check_game(text), public.get_field(text), public.get_state(text),
+  public.create_game(jsonb), public.join_game(text, text), public.leave_game(text),
+  public.start_game(text, jsonb), public.end_game(text), public.confirm_ready(uuid),
+  public.update_position(text, double precision, double precision, double precision),
+  public.confirm_hidden(uuid, double precision, double precision),
+  public.ask_question(uuid, text, double precision, double precision, text),
+  public.set_suggestion(uuid, text, text), public.answer_question(uuid, text, text),
+  public.roll_dice(uuid, uuid, int), public.choose_blockade(uuid, int),
+  public.play_blockade(uuid), public.complete_blockade(uuid, text), public.report_found(uuid, text)
+from public, anon;
