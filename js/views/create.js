@@ -105,14 +105,19 @@ function step1(box) {
     <div class="map" id="fmap"></div>
     ${hasPM ? `
     <div class="card mt">
-      <h3>2. Fläche zeichnen oder ausschneiden</h3>
-      <p class="muted small">Tippe Punkte auf die Karte. Zum Abschließen tippst du wieder auf den ersten Punkt.</p>
+      <h3>2. Spielfeld mit eigenen Gebieten anpassen</h3>
+      <p class="muted small">Zeichne ein Gebiet, indem du Eckpunkte auf die Karte tippst. Zum Abschließen tippst du wieder auf den ersten Punkt.</p>
+      <div class="small" style="font-weight:700;margin-top:10px">Spielfeld ändern</div>
       <div class="map-tools">
-        <button class="btn small" data-draw="add">+ Fläche hinzufügen</button>
-        <button class="btn small red" data-draw="cut">− Fläche ausschneiden</button>
-        <button class="btn small ghost" data-tool="edit">Punkte verschieben</button>
-        <button class="btn small ghost" data-tool="remove">Fläche löschen</button>
+        <button class="btn small" data-draw="add">+ Gebiet zum Spielfeld hinzufügen</button>
+        <button class="btn small red" data-draw="cut">− Gebiet aus dem Spielfeld herausnehmen</button>
       </div>
+      <div class="small" style="font-weight:700">Gezeichnete Gebiete bearbeiten</div>
+      <div class="map-tools">
+        <button class="btn small ghost" data-tool="edit">Eckpunkte verschieben</button>
+        <button class="btn small ghost" data-tool="remove">Gezeichnetes Gebiet verwerfen</button>
+      </div>
+      <p class="muted small">„Verwerfen“ löscht nur deine Zeichnung wieder, egal ob sie etwas hinzugefügt oder herausgenommen hat.</p>
       <div id="drawhint"></div>
     </div>` : '<div class="banner warn mt">Das Zeichenwerkzeug konnte nicht geladen werden. Du kannst trotzdem Stadtteile auswählen.</div>'}
     <div id="summary" class="banner info mt"></div>
@@ -138,8 +143,8 @@ function step1(box) {
     const c = drawnLayer.getLayers().filter((l) => l.hsKind === 'cut').length;
     const parts = [];
     if (n) parts.push(`${n} ${n === 1 ? 'Gebiet' : 'Gebiete'} ausgewählt`);
-    if (a) parts.push(`${a} gezeichnete ${a === 1 ? 'Fläche' : 'Flächen'}`);
-    if (c) parts.push(`${c} ausgeschnitten`);
+    if (a) parts.push(`${a} ${a === 1 ? 'Gebiet' : 'Gebiete'} hinzugefügt`);
+    if (c) parts.push(`${c} ${c === 1 ? 'Gebiet' : 'Gebiete'} herausgenommen`);
     $('#summary', box).textContent = parts.length ? parts.join(' · ') : 'Noch kein Spielfeld festgelegt.';
   };
 
@@ -255,7 +260,7 @@ function step1(box) {
           pathOptions: styleDrawn(drawKind),
         });
         $('#drawhint', box).innerHTML = `<div class="banner ${drawKind === 'cut' ? 'danger' : 'info'}">
-          ${drawKind === 'cut' ? 'Ausschneiden' : 'Hinzufügen'}: Punkte setzen, zum Schließen auf den ersten Punkt tippen.
+          ${drawKind === 'cut' ? 'Gebiet aus dem Spielfeld herausnehmen' : 'Gebiet zum Spielfeld hinzufügen'}: Eckpunkte setzen, zum Abschließen auf den ersten Punkt tippen.
           <button class="btn small ghost mt" data-stopdraw>Abbrechen</button></div>`;
       }
       if (e.target.closest('[data-stopdraw]')) { map.pm.disableDraw(); $('#drawhint', box).innerHTML = ''; }
@@ -264,14 +269,14 @@ function step1(box) {
         if (map.pm.globalRemovalModeEnabled()) map.pm.disableGlobalRemovalMode();
         map.pm.toggleGlobalEditMode();
         $('#drawhint', box).innerHTML = map.pm.globalEditModeEnabled()
-          ? '<div class="banner info">Ziehe die Punkte deiner Flächen. Tippe nochmal auf „Punkte verschieben“, wenn du fertig bist.</div>' : '';
+          ? '<div class="banner info">Ziehe die Eckpunkte deiner gezeichneten Gebiete. Tippe nochmal auf „Eckpunkte verschieben“, wenn du fertig bist.</div>' : '';
       }
       if (t?.dataset.tool === 'remove') {
         map.pm.disableDraw();
         if (map.pm.globalEditModeEnabled()) map.pm.disableGlobalEditMode();
         map.pm.toggleGlobalRemovalMode();
         $('#drawhint', box).innerHTML = map.pm.globalRemovalModeEnabled()
-          ? '<div class="banner danger">Tippe auf eine gezeichnete Fläche, um sie zu löschen.</div>' : '';
+          ? '<div class="banner danger">Tippe auf ein gezeichnetes Gebiet, um die Zeichnung zu verwerfen. Das Spielfeld selbst bleibt sonst unverändert.</div>' : '';
       }
     });
   }
@@ -284,7 +289,7 @@ function step1(box) {
   $('[data-back]', box).addEventListener('click', () => { save(); go(0); });
   $('[data-next]', box).addEventListener('click', () => {
     save();
-    if (!S.selected.size && !S.adds.length) { toast('Bitte wähle Stadtteile aus oder zeichne eine Fläche.', 'error'); return; }
+    if (!S.selected.size && !S.adds.length) { toast('Bitte wähle Stadtteile aus oder füge ein gezeichnetes Gebiet hinzu.', 'error'); return; }
     go(2);
   });
 }

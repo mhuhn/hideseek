@@ -1,7 +1,7 @@
 // Service Worker: App-Dateien zuerst aus dem Netz (damit Updates sofort ankommen),
 // bei fehlender Verbindung aus dem Cache. Supabase, Karten und OSM-Abfragen
 // gehen immer direkt ins Netz.
-const CACHE = 'hideseek-v5';
+const CACHE = 'hideseek-v6';
 const SHELL = [
   './',
   'index.html',
