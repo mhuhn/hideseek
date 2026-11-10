@@ -253,47 +253,67 @@ function stepDraw(box) {
     </div>`;
 
   map = createMap($('#fmap', box));
-  // Stadtteile nur als Vorschau – nicht anklickbar, damit Klicks beim Zeichnen ankommen
-  const preview = L.featureGroup().addTo(map);
-  for (const d of (S.levels[S.level] || []).filter((x) => S.selected.has(x.id))) {
-    L.geoJSON(d.geometry, { style: { ...STYLE_SELECTED, fillOpacity: 0.2 }, interactive: false, pmIgnore: true }).addTo(preview);
-  }
+  // Ergebnis-Spielfeld (Stadtteile + hinzugefügt − herausgenommen) als eine Fläche;
+  // nicht anklickbar, damit Klicks beim Zeichnen ankommen
+  const fieldLay = L.geoJSON(null, { style: FIELD_PREVIEW, interactive: false, pmIgnore: true }).addTo(map);
   const drawnLayer = L.featureGroup().addTo(map);
   const styleDrawn = (kind) => kind === 'cut'
-    ? { color: '#d63a3a', weight: 2, fillColor: '#d63a3a', fillOpacity: 0.3, dashArray: '6 4' }
-    : { color: '#1d2b53', weight: 2, fillColor: '#ff6b35', fillOpacity: 0.35 };
+    ? { color: '#d63a3a', weight: 2.5, fillColor: '#d63a3a', fillOpacity: 0.08, dashArray: '6 5' }
+    : { color: '#1d2b53', weight: 2.5, fillColor: '#1d2b53', fillOpacity: 0.05, dashArray: '6 5' };
 
-  const summary = () => {
-    const a = drawnLayer.getLayers().filter((l) => l.hsKind !== 'cut').length;
-    const c = drawnLayer.getLayers().filter((l) => l.hsKind === 'cut').length;
+  const currentDrawings = () => {
+    const adds = []; const cuts = [];
+    drawnLayer.eachLayer((l) => (l.hsKind === 'cut' ? cuts : adds).push(l.toGeoJSON(6).geometry));
+    return { adds, cuts };
+  };
+
+  const update = () => {
+    const { adds, cuts } = currentDrawings();
+    const f = computeField(adds, cuts);
+    fieldLay.clearLayers();
+    let fieldText = '';
+    if (f) {
+      fieldLay.addData(f);
+      fieldText = `Spielfeld: ${fmtArea(window.turf.area(f))}`;
+    } else if (f === undefined) {
+      // Vorschau ohne Verrechnung (Rechenbibliothek fehlt oder Geometrie fehlerhaft)
+      for (const d of selectedDistricts()) fieldLay.addData(d.geometry);
+      for (const g of adds) fieldLay.addData(g);
+    } else if (cuts.length) {
+      fieldText = 'Das Spielfeld ist jetzt leer.';
+    }
     const parts = [selectionText()];
-    if (a) parts.push(`${a} ${a === 1 ? 'Gebiet' : 'Gebiete'} hinzugefügt`);
-    if (c) parts.push(`${c} ${c === 1 ? 'Gebiet' : 'Gebiete'} herausgenommen`);
-    $('#summary', box).textContent = parts.join(' · ');
+    if (adds.length) parts.push(`${adds.length} ${adds.length === 1 ? 'Gebiet' : 'Gebiete'} hinzugefügt`);
+    if (cuts.length) parts.push(`${cuts.length} ${cuts.length === 1 ? 'Gebiet' : 'Gebiete'} herausgenommen`);
+    $('#summary', box).innerHTML = `${esc(parts.join(' · '))}${fieldText ? `<br><strong>${esc(fieldText)}</strong>` : ''}
+      <br><span class="small muted">Orange = Spielfeld, gestrichelt = deine Zeichnungen (blau hinzugefügt, rot herausgenommen)</span>`;
+  };
+
+  const addDrawn = (l, kind) => {
+    l.hsKind = kind;
+    l.setStyle(styleDrawn(kind));
+    l.on('pm:edit', update);
+    drawnLayer.addLayer(l);
   };
 
   for (const [kind, list] of [['add', S.adds], ['cut', S.cuts]]) {
-    for (const g of list) {
-      L.geoJSON(g, { style: styleDrawn(kind) }).eachLayer((l) => { l.hsKind = kind; drawnLayer.addLayer(l); });
-    }
+    for (const g of list) L.geoJSON(g).eachLayer((l) => addDrawn(l, kind));
   }
-  const all = L.featureGroup([...preview.getLayers(), ...drawnLayer.getLayers()]);
+  update();
+  const all = L.featureGroup([...fieldLay.getLayers(), ...drawnLayer.getLayers()]);
   if (all.getLayers().length) map.fitBounds(all.getBounds());
   else if (S.city) { const [s, n, w, e] = S.city.bbox; map.fitBounds([[s, w], [n, e]]); }
   else locateRoughly(map);
-  summary();
 
   if (hasPM) {
     let drawKind = 'add';
     map.on('pm:create', (e) => {
-      e.layer.hsKind = drawKind;
-      e.layer.setStyle(styleDrawn(drawKind));
       map.removeLayer(e.layer);
-      drawnLayer.addLayer(e.layer);
+      addDrawn(e.layer, drawKind);
       $('#drawhint', box).innerHTML = '';
-      summary();
+      update();
     });
-    map.on('pm:remove', (e) => { drawnLayer.removeLayer(e.layer); summary(); });
+    map.on('pm:remove', (e) => { drawnLayer.removeLayer(e.layer); update(); });
     box.addEventListener('click', (e) => {
       const d = e.target.closest('[data-draw]');
       const t = e.target.closest('[data-tool]');
@@ -335,8 +355,7 @@ function stepDraw(box) {
       if (map.pm.globalEditModeEnabled()) map.pm.disableGlobalEditMode();
       if (map.pm.globalRemovalModeEnabled()) map.pm.disableGlobalRemovalMode();
     }
-    S.adds = []; S.cuts = [];
-    drawnLayer.eachLayer((l) => (l.hsKind === 'cut' ? S.cuts : S.adds).push(l.toGeoJSON(6).geometry));
+    ({ adds: S.adds, cuts: S.cuts } = currentDrawings());
   };
   $('[data-back]', box).addEventListener('click', () => { save(); go(1); });
   $('[data-next]', box).addEventListener('click', () => {
@@ -346,6 +365,42 @@ function stepDraw(box) {
   });
 }
 
+
+const FIELD_PREVIEW = { color: '#ff6b35', weight: 2, fillColor: '#ff6b35', fillOpacity: 0.3 };
+
+function selectedDistricts() {
+  return (S.levels[S.level] || []).filter((d) => S.selected.has(d.id));
+}
+
+/**
+ * Spielfeld wie der Server es berechnet: Vereinigung aus Stadtteilen und
+ * hinzugefügten Gebieten, minus herausgenommene Gebiete.
+ * null = leer, undefined = konnte nicht berechnet werden.
+ */
+function computeField(adds, cuts) {
+  const T = window.turf;
+  const parts = [...selectedDistricts().map((d) => d.geometry), ...adds];
+  if (!parts.length) return null;
+  if (!T) return undefined;
+  const feat = (g) => ({ type: 'Feature', properties: {}, geometry: g });
+  try {
+    let f = feat(parts[0]);
+    for (const g of parts.slice(1)) f = T.union(f, feat(g)) || f;
+    for (const c of cuts) {
+      f = T.difference(f, feat(c));
+      if (!f) return null;
+    }
+    return f;
+  } catch (e) {
+    console.warn('Spielfeld-Vorschau', e);
+    return undefined;
+  }
+}
+
+function fmtArea(m2) {
+  return m2 >= 1e6 ? `${(m2 / 1e6).toLocaleString('de-DE', { maximumFractionDigits: 1 })} km²` : `${Math.round(m2 / 1000) * 1000} m²`;
+}
+
 function locateRoughly(m) {
   navigator.geolocation?.getCurrentPosition((p) => m.setView([p.coords.latitude, p.coords.longitude], 13), () => {}, { timeout: 8000, maximumAge: 600000 });
 }
@@ -353,9 +408,12 @@ function locateRoughly(m) {
 /** Vorschau des Spielfelds (ohne echte Vereinigung – die macht der Server) */
 function previewLayers() {
   const g = L.featureGroup();
-  for (const d of (S.levels[S.level] || []).filter((x) => S.selected.has(x.id))) {
-    L.geoJSON(d.geometry, { style: { ...FIELD_STYLE, weight: 1, fillOpacity: 0.18 }, interactive: false, pmIgnore: true }).addTo(g);
+  const f = computeField(S.adds, S.cuts);
+  if (f) {
+    L.geoJSON(f, { style: { ...FIELD_STYLE, weight: 2, fillOpacity: 0.18 }, interactive: false, pmIgnore: true }).addTo(g);
+    return g;
   }
+  for (const d of selectedDistricts()) L.geoJSON(d.geometry, { style: { ...FIELD_STYLE, weight: 1, fillOpacity: 0.18 }, interactive: false, pmIgnore: true }).addTo(g);
   for (const a of S.adds) L.geoJSON(a, { style: { ...FIELD_STYLE, weight: 1, fillOpacity: 0.18 }, interactive: false, pmIgnore: true }).addTo(g);
   for (const c of S.cuts) L.geoJSON(c, { style: { color: '#d63a3a', weight: 1, fillColor: '#d63a3a', fillOpacity: 0.35 }, interactive: false, pmIgnore: true }).addTo(g);
   return g;
