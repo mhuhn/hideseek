@@ -51,6 +51,15 @@ export async function searchPlaces(q) {
   }));
 }
 
+/** Name der Stadt/Gemeinde an einem Punkt (für die Vorbelegung der Ortssuche) */
+export async function reverseCity(pt) {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&accept-language=de&lat=${pt.lat}&lon=${pt.lng}`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const a = (await res.json()).address || {};
+  return a.city || a.town || a.village || a.municipality || null;
+}
+
 // ------------------------------------------------------------- Stadtteile
 
 const key = (p) => `${p.lat.toFixed(7)},${p.lon.toFixed(7)}`;

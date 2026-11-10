@@ -9,7 +9,7 @@ Läuft über GitHub Pages: <https://mhuhn.github.io/hideseek/>
 - **Spiel anlegen** (Spielleiter): Titel, optional Zeitraum, Spielerzahl, Spielfeld auf der Karte (Stadtteile antippen, eigene Gebiete hinzufügen oder herausnehmen), bis zu 4 Orte für die Relativ-Fragen, eine Sehenswürdigkeit für „Zeichnen“, Versteckzeit, Zielzone, Antwortzeit. Die App erzeugt eine Spiel-ID aus 5 Hex-Ziffern.
 - **Beitreten**: Spiel-ID und Name eingeben; der Name wird auf dem Gerät gespeichert.
 - **Start**: unter 4 Spielern jeder für sich, über 6 in Teams, dazwischen wählt der Spielleiter. Die erste Hider-Partei wird ausgelost.
-- **Runde**: alle bestätigen „bereit“ → Versteckzeit → Hider bestätigen das Versteck (sonst gilt die Position nach Ablauf) → Suche mit Fragen, Münzen, Würfeln und Blockaden → Endspiel, sobald ein Seeker-Team die Zielzone betritt → Fund mit Beweisfoto.
+- **Runde**: alle bestätigen „bereit“ → Versteckzeit → Hider bestätigen das Versteck (sonst gilt die Position nach Ablauf) → Suche mit Fragen, Münzen, Würfeln und Blockaden → Endspiel, sobald ein Seeker-Team die Zielzone betritt → Fund-Meldung, die die App über die Position prüft (liegt das Such-Team daneben, +8 min Suchzeit).
 - **Wertung**: Hider 3 × Suchminuten, Finder 1 ×. Die Finder verstecken sich als Nächstes (oder eine zufällige Partei, die noch nicht dran war). Ende, wenn jede Partei einmal Hider war.
 
 ## Technik

@@ -103,6 +103,7 @@ create table public.rounds (
   found_by_party_id  uuid references public.parties (id),
   proof_path         text,
   seek_minutes       int,
+  penalty_minutes    int  not null default 0,   -- Strafzeit für falsche Fund-Meldungen
   unique (game_id, number)
 );
 
@@ -454,7 +455,7 @@ begin
       'hiding_started_at', r.hiding_started_at, 'hide_deadline', r.hide_deadline,
       'seeking_started_at', r.seeking_started_at, 'endgame_at', r.endgame_at,
       'found_at', r.found_at, 'found_by_party_id', r.found_by_party_id,
-      'seek_minutes', r.seek_minutes, 'proof_path', r.proof_path,
+      'seek_minutes', r.seek_minutes, 'proof_path', r.proof_path, 'penalty_minutes', r.penalty_minutes,
       'ready', (select coalesce(jsonb_agg(player_id), '[]'::jsonb) from public.ready where round_id = r.id),
       'hide', case when v_full and r.hide_lat is not null
                    then jsonb_build_object('lat', r.hide_lat, 'lng', r.hide_lng) end),
@@ -655,6 +656,12 @@ begin
   perform hs._new_round(p_game, (select id from public.parties where game_id = p_game order by random() limit 1));
 end $$;
 
+-- Einzige Stelle, an der Standorte gelöscht werden (Spielende, Datenschutz)
+create or replace function hs._clear_positions(p_game text)
+returns void language sql security definer set search_path = '' as $$
+  delete from public.positions where game_id = p_game;
+$$;
+
 create or replace function public.end_game(p_game text)
 returns void language plpgsql security definer set search_path = '' as $$
 begin
@@ -664,7 +671,7 @@ begin
   update public.rounds set status = 'cancelled'
    where game_id = p_game and status in ('ready', 'hiding', 'seeking');
   update public.games set status = 'finished', finished_at = now() where id = p_game;
-  delete from public.positions where game_id = p_game;
+  perform hs._clear_positions(p_game);
 end $$;
 
 -- -----------------------------------------------------------------------------
@@ -1007,26 +1014,45 @@ end $$;
 -- Gefunden
 -- -----------------------------------------------------------------------------
 
-create or replace function public.report_found(p_round uuid, p_path text)
-returns void language plpgsql security definer set search_path = '' as $$
+-- Seeker melden einen Fund. Geprüft wird über die Position: Ist niemand aus der
+-- Hider-Partei im Umkreis von 40 m, zählt die Suchzeit 8 Minuten mehr.
+create or replace function public.report_found(p_round uuid, p_lat double precision, p_lng double precision)
+returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
+  c_radius constant int := 40;
   r       public.rounds;
   me      public.players;
+  v_d     double precision;
   v_min   int;
   v_was   boolean;
   v_next  uuid;
 begin
+  perform hs._tick((select game_id from public.rounds where id = p_round));
   select * into r from public.rounds where id = p_round for update;
   select * into me from public.players where game_id = r.game_id and user_id = auth.uid();
   if me.party_id is null or me.party_id = r.hider_party_id then raise exception 'Nur Seeker melden einen Fund'; end if;
   if r.status <> 'seeking' then raise exception 'Gerade wird nicht gesucht'; end if;
-  if p_path is null or p_path not like r.game_id || '/%' then raise exception 'Bitte macht ein Beweisfoto'; end if;
+  if p_lat is null or p_lng is null then raise exception 'Dein Standort ist unbekannt'; end if;
+
+  -- kleinster Abstand zu einem Mitglied der Hider-Partei, sonst zum Versteck
+  select min(hs._dist(p_lat, p_lng, pos.lat, pos.lng)) into v_d
+    from public.positions pos join public.players pl on pl.id = pos.player_id
+   where pl.party_id = r.hider_party_id;
+  if v_d is null and r.hide_lat is not null then v_d := hs._dist(p_lat, p_lng, r.hide_lat, r.hide_lng); end if;
+  if v_d is null then raise exception 'Die Position der Hider ist noch unbekannt'; end if;
+
+  if v_d > c_radius then
+    update public.rounds
+       set seeking_started_at = seeking_started_at - interval '8 minutes',
+           penalty_minutes = penalty_minutes + 8
+     where id = r.id;
+    return jsonb_build_object('found', false, 'penalty_minutes', 8);
+  end if;
 
   v_min := floor(extract(epoch from (now() - r.seeking_started_at)) / 60)::int;
 
   update public.rounds
-     set status = 'found', found_at = now(), found_by_party_id = me.party_id,
-         proof_path = p_path, seek_minutes = v_min
+     set status = 'found', found_at = now(), found_by_party_id = me.party_id, seek_minutes = v_min
    where id = r.id;
   update public.parties set minutes = minutes + 3 * v_min where id = r.hider_party_id;
   update public.parties set minutes = minutes + v_min where id = me.party_id;
@@ -1035,8 +1061,8 @@ begin
 
   if not exists (select 1 from public.parties where game_id = r.game_id and not was_hider) then
     update public.games set status = 'finished', finished_at = now() where id = r.game_id;
-    delete from public.positions where game_id = r.game_id;
-    return;
+    perform hs._clear_positions(r.game_id);
+    return jsonb_build_object('found', true, 'finished', true);
   end if;
 
   select was_hider into v_was from public.parties where id = me.party_id;
@@ -1047,6 +1073,7 @@ begin
     v_next := me.party_id;
   end if;
   perform hs._new_round(r.game_id, v_next);
+  return jsonb_build_object('found', true);
 end $$;
 
 -- -----------------------------------------------------------------------------
@@ -1087,7 +1114,7 @@ grant execute on function
   public.choose_blockade(uuid, int),
   public.play_blockade(uuid),
   public.complete_blockade(uuid, text),
-  public.report_found(uuid, text)
+  public.report_found(uuid, double precision, double precision)
 to authenticated;
 
 -- Nicht angemeldete Aufrufer (anon) brauchen die Spiel-Funktionen nicht.
@@ -1101,5 +1128,5 @@ revoke execute on function
   public.ask_question(uuid, text, double precision, double precision, text),
   public.set_suggestion(uuid, text, text), public.answer_question(uuid, text, text),
   public.roll_dice(uuid, uuid, int), public.choose_blockade(uuid, int),
-  public.play_blockade(uuid), public.complete_blockade(uuid, text), public.report_found(uuid, text)
+  public.play_blockade(uuid), public.complete_blockade(uuid, text), public.report_found(uuid, double precision, double precision)
 from public, anon;

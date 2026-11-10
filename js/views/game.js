@@ -145,19 +145,24 @@ function notify(prev, s) {
   const r = s.round;
   if (!seen || !prev) {
     seen = {
-      round: r?.id, status: r?.status, endgame: !!r?.endgame_at,
+      round: r?.id, status: r?.status, endgame: !!r?.endgame_at, penalty: r?.penalty_minutes || 0,
       questions: new Set((s.questions || []).map((q) => q.id + q.status)),
       blockades: new Set((s.blockades || []).map((b) => b.id + b.status)),
     };
     return;
   }
   if (r && r.id !== seen.round) {
-    seen.round = r.id; seen.status = r.status; seen.endgame = false;
+    seen.round = r.id; seen.status = r.status; seen.endgame = false; seen.penalty = r.penalty_minutes || 0;
     if (s.game.status === 'playing') { buzz(); toast(`Runde ${r.number} beginnt`, 'ok'); }
   } else if (r && r.status !== seen.status) {
     seen.status = r.status;
     if (r.status === 'hiding') { buzz(); toast(s.me.role === 'hider' ? 'Los, versteckt euch!' : 'Die Hider verstecken sich jetzt.'); }
     if (r.status === 'seeking') { buzz([300, 100, 300]); toast(s.me.role === 'hider' ? 'Die Suche beginnt!' : 'Los geht\'s – sucht die Hider!', 'ok'); }
+  }
+  if (r && (r.penalty_minutes || 0) > seen.penalty) {
+    seen.penalty = r.penalty_minutes;
+    if (s.me.role === 'hider') { buzz([150]); toast('Ein Such-Team hat sich geirrt: 8 Minuten Suchzeit mehr für euch!', 'ok'); }
+    else if (s.me.role === 'seeker') toast('Falsche Fund-Meldung: Die Suchzeit wurde um 8 Minuten verlängert.');
   }
   if (r?.endgame_at && !seen.endgame) {
     seen.endgame = true;
@@ -472,6 +477,7 @@ function seekTimer() {
   return `<div class="card center">
     <div class="muted small">Suchzeit</div>
     <div class="timer mid" data-since="${r.seeking_started_at}"></div>
+    ${r.penalty_minutes ? `<div class="small muted">inkl. ${r.penalty_minutes} min Strafzeit für falsche Fund-Meldungen</div>` : ''}
     ${endgame() ? '<span class="badge red mt">Endspiel</span>' : ''}
   </div>`;
 }
@@ -877,12 +883,17 @@ const ACTIONS = {
     });
   },
   found: async (el) => {
-    if (!await confirmDialog('Gefunden?', 'Habt ihr jemanden aus dem Hider-Team gefunden? Macht jetzt ein Beweisfoto. Danach endet die Runde für alle.', 'Beweisfoto machen', 'red')) return;
+    if (!await confirmDialog('Gefunden?', 'Steht ihr direkt bei jemandem aus dem Hider-Team? Die App prüft das über eure Position. <strong>Liegt ihr daneben, wird die Suchzeit um 8 Minuten verlängert.</strong>', 'Ja, gefunden!', 'red')) return;
     await busy(el, async () => {
-      const path = await captureAndUpload(gameId, 'environment');
-      if (!path) return;
-      await rpc('report_found', { p_round: round().id, p_path: path });
-      buzz([300, 100, 300]);
+      const pos = await freshPos(5000);
+      const res = await rpc('report_found', { p_round: round().id, p_lat: pos.lat, p_lng: pos.lng });
+      if (res.found) {
+        buzz([300, 100, 300]);
+        toast('Gefunden! Die Runde ist vorbei.', 'ok');
+      } else {
+        buzz([600]);
+        await alertDialog('Leider nicht', '<p>Hier ist kein Hider. Die Suchzeit wurde um <strong>8 Minuten</strong> verlängert.</p><p class="muted small">Gefunden zählt, wenn ihr höchstens etwa 40 m von jemandem aus dem Hider-Team entfernt seid.</p>', 'Weitersuchen');
+      }
       refresh();
     });
   },

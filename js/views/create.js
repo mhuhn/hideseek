@@ -2,7 +2,7 @@
 import { rpc } from '../sb.js';
 import { $, esc, store, busy, toast, showError } from '../ui.js';
 import { createMap, placeIcon, FIELD_STYLE } from '../mapview.js';
-import { searchPlaces, loadDistricts } from '../osm.js';
+import { searchPlaces, loadDistricts, reverseCity } from '../osm.js';
 
 const LEVEL_NAMES = { 7: 'Verbände', 8: 'Gemeinden', 9: 'Bezirke', 10: 'Stadtteile', 11: 'Viertel' };
 const STEP_TITLES = ['Grunddaten', 'Spielfeld', 'Orte', 'Regeln'];
@@ -96,7 +96,7 @@ function step1(box) {
     <div class="card">
       <h3>1. Stadt suchen und Stadtteile antippen</h3>
       <form class="row" id="f-search">
-        <input type="search" id="q" placeholder="Stadt oder Ort" value="${esc(S.city?.short || '')}" class="grow">
+        <input type="search" id="q" placeholder="Stadt oder Ort" value="${esc(S.city?.short || S.cityGuess || '')}" class="grow">
         <button class="btn" type="submit">Suchen</button>
       </form>
       <div id="results" class="mt"></div>
@@ -127,6 +127,17 @@ function step1(box) {
     </div>`;
 
   map = createMap($('#fmap', box));
+
+  // Ortssuche mit der Stadt vorbelegen, in der man gerade ist
+  if (!S.city && !$('#q', box).value) {
+    navigator.geolocation?.getCurrentPosition(async (p) => {
+      try {
+        const name = await reverseCity({ lat: p.coords.latitude, lng: p.coords.longitude });
+        const q = $('#q', box);
+        if (name && q?.isConnected && !q.value) { q.value = name; S.cityGuess = name; }
+      } catch { /* ohne Vorbelegung weiter */ }
+    }, () => {}, { timeout: 10000, maximumAge: 600000 });
+  }
   const districtLayer = L.featureGroup().addTo(map);
   const drawnLayer = L.featureGroup().addTo(map);
 
