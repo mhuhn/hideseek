@@ -305,7 +305,7 @@ function renderLobby() {
     <div class="card"><h3>Spielfeld</h3><div data-map-slot="small"></div></div>
     <div class="card flat small">
       <strong>Regeln</strong><br>
-      Versteckzeit ${g.hide_minutes} min · Zielzone ${g.zone_radius_m} m · Antwortzeit ${g.answer_minutes} min
+      Versteckzeit ${g.hide_minutes} min · Zielzone ${g.zone_radius_m} m · Antwortzeit ${g.answer_minutes} min · ${g.round_pot_minutes} Minuten pro Runde
       ${g.places?.length ? `<br>Orte: ${g.places.map((p) => esc(p.name)).join(', ')}` : ''}
       ${g.landmark ? `<br>Zeichnen: ${esc(g.landmark)}` : ''}
     </div>
@@ -382,7 +382,7 @@ function lastResult() {
   return `<div class="card">
     <div class="muted small">Ergebnis Runde ${h.number}</div>
     <h3>${esc(partyLabel(finder))} hat ${esc(partyLabel(hider))} nach ${h.seek_minutes} ${h.seek_minutes === 1 ? 'Minute' : 'Minuten'} gefunden</h3>
-    <p class="small">${esc(partyLabel(hider))} bekommt <strong>${h.seek_minutes * 3} min</strong>, ${esc(partyLabel(finder))} <strong>${h.seek_minutes} min</strong>.</p>
+    <p class="small">${esc(partyLabel(hider))} bekommt <strong>${h.hider_award ?? h.seek_minutes} min</strong>, ${esc(partyLabel(finder))} <strong>${h.finder_award ?? 0} min</strong>.</p>
     ${h.proof_path ? photoTag(h.proof_path, 'Beweisfoto') : ''}
   </div>`;
 }
@@ -700,7 +700,9 @@ function renderScore() {
       <span class="min">${p.minutes} min</span></div>`).join('')}
   </div>
   ${hist.length ? `<div class="card"><h3>Runden</h3>${hist.map((h) => `<p class="small">Runde ${h.number}: ${esc(partyLabel(partyOf(h.found_by_party_id)))} findet ${esc(partyLabel(partyOf(h.hider_party_id)))} nach ${h.seek_minutes} min</p>`).join('')}</div>` : ''}
-  <div class="card flat small">Hider bekommen 3 × die Suchminuten, das Team, das sie findet, 1 ×. Es wird gespielt, bis jede Partei einmal Hider war.</div>
+  <div class="card flat small"><strong>Wertung:</strong> Jede Runde ist ${st.game.round_pot_minutes} Minuten wert. Die Hider bekommen die Suchzeit (höchstens ${st.game.round_pot_minutes} min),
+    das Such-Team, das findet, den Rest – mindestens 10 Minuten. Die anderen Such-Teams bekommen nichts.
+    Beispiel: Fund nach 20 min → Hider 20, Finder ${Math.max(10, st.game.round_pot_minutes - 20)}. Gespielt wird, bis jede Partei einmal Hider war.</div>
   ${me().is_admin ? '<button class="btn ghost block" data-act="finish">Spiel vorzeitig beenden</button>' : ''}`;
 }
 

@@ -21,7 +21,7 @@ function freshState() {
     adds: [], cuts: [],                     // GeoJSON-Geometrien (selbst gezeichnet)
     places: [{ name: '' }, { name: '' }, { name: '' }, { name: '' }],
     landmark: '',
-    hide: 12, radius: 200, answer: 3,
+    hide: 12, radius: 200, answer: 3, pot: 60,
   };
 }
 
@@ -504,6 +504,7 @@ function step3(box) {
       ${slider('hide', 'Versteckzeit', 5, 60, 1, S.hide, 'min', 'So lange haben die Hider Zeit, sich zu verstecken.')}
       ${slider('radius', 'Zielzone', 50, 1000, 10, S.radius, 'm', 'Umkreis um das Versteck. Betritt ein Seeker-Team die Zone, beginnt das Endspiel.')}
       ${slider('answer', 'Antwortzeit', 2, 10, 1, S.answer, 'min', 'So lange haben die Hider Zeit, eine Frage zu beantworten.')}
+      ${slider('pot', 'Minuten pro Runde', 20, 180, 5, S.pot, 'min', 'Bei einem Fund bekommen die Hider die Suchzeit (höchstens diesen Wert), das Such-Team, das findet, den Rest – mindestens 10 Minuten.')}
     </div>
     <div class="card flat small">
       <strong>${esc(S.title)}</strong><br>
@@ -514,7 +515,7 @@ function step3(box) {
       <button class="btn ghost" data-back>Zurück</button>
       <button class="btn green big" data-create>Spiel anlegen</button>
     </div>`;
-  for (const [id, unit] of [['hide', 'min'], ['radius', 'm'], ['answer', 'min']]) {
+  for (const [id, unit] of [['hide', 'min'], ['radius', 'm'], ['answer', 'min'], ['pot', 'min']]) {
     const inp = $('#' + id, box);
     inp.addEventListener('input', () => { $('#' + id + '-o', box).textContent = `${inp.value} ${unit}`; S[id] = +inp.value; });
   }
@@ -549,7 +550,7 @@ async function createGame() {
     title: S.title, name: S.name, plays: S.plays,
     earliest_at: toIso(S.earliest), latest_at: toIso(S.latest),
     min_players: S.min, max_players: S.max,
-    hide_minutes: S.hide, zone_radius_m: S.radius, answer_minutes: S.answer,
+    hide_minutes: S.hide, zone_radius_m: S.radius, answer_minutes: S.answer, round_pot_minutes: S.pot,
     places: S.places.filter((x) => x.lat != null && x.name.trim()).map((x) => ({ name: x.name.trim(), lat: x.lat, lng: x.lng })),
     landmark: S.landmark,
     add: [...chosen.map((d) => round6(d.geometry)), ...S.adds.map(round6)],

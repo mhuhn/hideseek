@@ -31,6 +31,7 @@ create table public.games (
   hide_minutes   int  not null default 12  check (hide_minutes between 5 and 60),
   zone_radius_m  int  not null default 200 check (zone_radius_m between 50 and 1000),
   answer_minutes int  not null default 3   check (answer_minutes between 2 and 10),
+  round_pot_minutes int not null default 60 check (round_pot_minutes between 20 and 180),  -- Minuten-Topf pro Runde
   places         jsonb not null default '[]',     -- [{name, lat, lng}], max. 4
   landmark       text check (char_length(landmark) <= 80),
   field          extensions.geometry(MultiPolygon, 4326) not null,
@@ -104,6 +105,8 @@ create table public.rounds (
   proof_path         text,
   seek_minutes       int,
   penalty_minutes    int  not null default 0,   -- Strafzeit für falsche Fund-Meldungen
+  hider_award        int,                       -- Minuten für die Hider in dieser Runde
+  finder_award       int,                       -- Minuten für das Such-Team, das gefunden hat
   unique (game_id, number)
 );
 
@@ -430,7 +433,8 @@ begin
       'earliest_at', g.earliest_at, 'latest_at', g.latest_at,
       'min_players', g.min_players, 'max_players', g.max_players,
       'hide_minutes', g.hide_minutes, 'zone_radius_m', g.zone_radius_m,
-      'answer_minutes', g.answer_minutes, 'places', g.places, 'landmark', g.landmark,
+      'answer_minutes', g.answer_minutes, 'round_pot_minutes', g.round_pot_minutes,
+      'places', g.places, 'landmark', g.landmark,
       'team_mode', g.team_mode,
       'has_districts', exists (select 1 from public.districts where game_id = g.id)),
     'players', (select coalesce(jsonb_agg(jsonb_build_object(
@@ -444,6 +448,7 @@ begin
     'history', (select coalesce(jsonb_agg(jsonb_build_object(
                   'number', number, 'hider_party_id', hider_party_id, 'status', status,
                   'found_by_party_id', found_by_party_id, 'seek_minutes', seek_minutes,
+                  'hider_award', hider_award, 'finder_award', finder_award,
                   'proof_path', proof_path) order by number), '[]'::jsonb)
                 from public.rounds where game_id = p_game and status = 'found'));
 
@@ -530,12 +535,13 @@ begin
   end loop;
 
   insert into public.games (id, title, admin_id, earliest_at, latest_at, min_players, max_players,
-                            hide_minutes, zone_radius_m, answer_minutes, places, landmark, field)
+                            hide_minutes, zone_radius_m, answer_minutes, round_pot_minutes, places, landmark, field)
   values (v_id, btrim(p->>'title'), auth.uid(),
           nullif(p->>'earliest_at', '')::timestamptz, nullif(p->>'latest_at', '')::timestamptz,
           coalesce((p->>'min_players')::int, 3), coalesce((p->>'max_players')::int, 12),
           coalesce((p->>'hide_minutes')::int, 12), coalesce((p->>'zone_radius_m')::int, 200),
           coalesce((p->>'answer_minutes')::int, 3),
+          coalesce((p->>'round_pot_minutes')::int, 60),
           coalesce((select jsonb_agg(jsonb_build_object('name', btrim(e->>'name'),
                                     'lat', (e->>'lat')::float8, 'lng', (e->>'lng')::float8))
                     from jsonb_array_elements(coalesce(p->'places', '[]'::jsonb)) e), '[]'::jsonb),
@@ -1016,11 +1022,17 @@ end $$;
 
 -- Seeker melden einen Fund. Geprüft wird über die Position: Ist niemand aus der
 -- Hider-Partei im Umkreis von 40 m, zählt die Suchzeit 8 Minuten mehr.
+-- Wertung „Minuten-Topf“: Die Hider bekommen die Suchzeit (höchstens den Topf),
+-- das Such-Team, das findet, den Rest – mindestens 10 Minuten Fundprämie.
 create or replace function public.report_found(p_round uuid, p_lat double precision, p_lng double precision)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
   c_radius constant int := 40;
+  c_bonus  constant int := 10;
   r       public.rounds;
+  g       public.games;
+  v_hider int;
+  v_finder int;
   me      public.players;
   v_d     double precision;
   v_min   int;
@@ -1029,6 +1041,7 @@ declare
 begin
   perform hs._tick((select game_id from public.rounds where id = p_round));
   select * into r from public.rounds where id = p_round for update;
+  select * into g from public.games where id = r.game_id;
   select * into me from public.players where game_id = r.game_id and user_id = auth.uid();
   if me.party_id is null or me.party_id = r.hider_party_id then raise exception 'Nur Seeker melden einen Fund'; end if;
   if r.status <> 'seeking' then raise exception 'Gerade wird nicht gesucht'; end if;
@@ -1050,12 +1063,15 @@ begin
   end if;
 
   v_min := floor(extract(epoch from (now() - r.seeking_started_at)) / 60)::int;
+  v_hider := least(v_min, g.round_pot_minutes);
+  v_finder := greatest(c_bonus, g.round_pot_minutes - v_min);
 
   update public.rounds
-     set status = 'found', found_at = now(), found_by_party_id = me.party_id, seek_minutes = v_min
+     set status = 'found', found_at = now(), found_by_party_id = me.party_id, seek_minutes = v_min,
+         hider_award = v_hider, finder_award = v_finder
    where id = r.id;
-  update public.parties set minutes = minutes + 3 * v_min where id = r.hider_party_id;
-  update public.parties set minutes = minutes + v_min where id = me.party_id;
+  update public.parties set minutes = minutes + v_hider where id = r.hider_party_id;
+  update public.parties set minutes = minutes + v_finder where id = me.party_id;
   update public.blockades set status = 'void' where round_id = r.id and status in ('choosing', 'held', 'active');
   update public.questions set status = 'expired', answered_at = now() where round_id = r.id and status = 'pending';
 
