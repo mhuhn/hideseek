@@ -21,7 +21,7 @@ async function route() {
   setTopbarRight('');
   setTabbar('');
   main.innerHTML = '';
-  window.scrollTo(0, 0);
+  document.getElementById('main').scrollTo(0, 0);
 
   if (!configured) {
     main.innerHTML = `<div class="hero"><img src="icons/icon.svg" alt=""><h1>hide<b>&amp;</b>seek</h1></div>

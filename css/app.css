@@ -26,16 +26,28 @@
 
 * { box-sizing: border-box; }
 
+/* ---------------------------------------------------------------------------
+   Oberer Rand der installierten iOS-PWA – NICHT ÄNDERN, ohne das hier zu lesen.
+   Bewährte Lösung aus Voka/Tourwetter gegen den verwaschenen Verlauf oben:
+   1. Statusleiste „default“ (index.html), nicht „black-translucent“
+   2. html-Hintergrund = Kopfleistenfarbe = theme-color = Manifest-Farben
+   3. body fest im Viewport (position: fixed; inset: 0) – das Dokument scrollt
+      nie unter die Statusleiste; gescrollt wird nur im <main> darunter
+   4. Kopfleiste fest, voll breit, einfarbig deckend, ohne Transparenz/Blur
+   --------------------------------------------------------------------------- */
 html {
-  background: var(--bg);
+  height: 100%;
+  background: var(--orange);
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
 }
 
 body {
   margin: 0;
-  min-height: 100vh;
-  min-height: 100dvh;
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
   background: var(--bg);
   color: var(--text);
   font-family: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -45,29 +57,17 @@ body {
 
 body.has-tabbar { --tabbar-h: 64px; }
 
-/* ---------------------------------------------------------------------------
-   Kopfleiste
-   Deckend, ohne backdrop-filter und ohne Transparenz. Sie reicht per
-   padding-top in den Bereich der Statusleiste; ::before deckt zusätzlich den
-   Überscroll-Bereich oberhalb ab. So bleibt der obere Rand immer scharf.
-   --------------------------------------------------------------------------- */
 .topbar {
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 1200;
   background: var(--orange);
   color: #fff;
   padding-top: var(--top);
   padding-left: var(--left);
   padding-right: var(--right);
-}
-.topbar::before {
-  content: "";
-  position: absolute;
-  left: 0; right: 0;
-  bottom: 100%;
-  height: 100vh;
-  background: var(--orange);
 }
 .topbar-inner {
   height: 52px;
@@ -101,10 +101,17 @@ body.has-tabbar { --tabbar-h: 64px; }
 
 /* --------------------------------------------------------------------------- */
 
+/* Der einzige Scrollbereich: unter der festen Kopfleiste */
 main {
+  position: absolute;
+  top: calc(52px + var(--top));
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding: 16px calc(16px + var(--right)) calc(24px + var(--tabbar-h) + var(--bottom)) calc(16px + var(--left));
-  max-width: 720px;
-  margin: 0 auto;
   outline: none;
 }
 
@@ -112,6 +119,7 @@ h1 { font-size: 26px; line-height: 1.2; margin: 4px 0 12px; }
 h2 { font-size: 21px; margin: 4px 0 10px; }
 h3 { font-size: 18px; margin: 4px 0 8px; }
 p { margin: 0 0 10px; }
+main > * { max-width: 688px; margin-left: auto; margin-right: auto; }
 .muted { color: var(--muted); }
 .small { font-size: 14px; }
 .center { text-align: center; }

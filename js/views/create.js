@@ -46,7 +46,7 @@ function render() {
     <div id="step"></div>`;
   const box = $('#step', main);
   [step0, step1, step2, step3][S.step](box);
-  window.scrollTo(0, 0);
+  document.getElementById('main').scrollTo(0, 0);
 }
 
 function go(step) { S.step = step; render(); }

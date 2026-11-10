@@ -807,7 +807,7 @@ function onTab(e) {
   tab = b.dataset.tab;
   lastSig = '';
   render();
-  window.scrollTo(0, 0);
+  document.getElementById('main').scrollTo(0, 0);
 }
 
 function onClick(e) {
