@@ -1,22 +1,40 @@
 // OpenStreetMap: Ortssuche (Nominatim), Stadtteilgrenzen und Straßen (Overpass)
 import { distToLine } from './geo.js';
 
-const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+// Öffentliche Overpass-Server. Sie sind oft überlastet und antworten dann gar nicht.
+// Deshalb fragen wir alle gleichzeitig, nehmen die erste brauchbare Antwort und
+// brechen nach einem festen Zeitlimit ab, statt unbegrenzt zu warten.
+const OVERPASS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
 
-async function overpass(query) {
-  let lastErr;
-  for (const url of OVERPASS) {
-    try {
+async function overpass(query, timeoutMs = 30000) {
+  const ctrls = OVERPASS.map(() => new AbortController());
+  const timer = setTimeout(() => ctrls.forEach((c) => c.abort()), timeoutMs);
+  try {
+    return await Promise.any(OVERPASS.map(async (url, i) => {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'data=' + encodeURIComponent(query),
+        signal: ctrls[i].signal,
       });
       if (!res.ok) throw new Error('Overpass ' + res.status);
-      return await res.json();
-    } catch (e) { lastErr = e; }
+      const data = await res.json();
+      if (data.remark && /runtime error|timed out/i.test(data.remark) && !(data.elements || []).length) {
+        throw new Error('Overpass: ' + data.remark);
+      }
+      ctrls.forEach((c, j) => { if (j !== i) c.abort(); });
+      return data;
+    }));
+  } catch {
+    throw new Error('OpenStreetMap antwortet gerade nicht oder zu langsam. Versuch es gleich noch einmal oder zeichne das Spielfeld selbst.');
+  } finally {
+    clearTimeout(timer);
   }
-  throw new Error('OpenStreetMap antwortet gerade nicht. Bitte später noch einmal versuchen. (' + lastErr?.message + ')');
 }
 
 export async function searchPlaces(q) {
@@ -84,19 +102,27 @@ function relationToGeometry(rel) {
  * Liefert {levels: {<admin_level>: [{name, geometry}]}}
  */
 export async function loadDistricts(place) {
+  // Nur Stadtteil-Ebenen (9 Bezirke, 10 Stadt-/Ortsteile, 11 Viertel). Gemeinden (8) würden
+  // die Nachbarorte mit ihren kompletten Grenzen mitliefern und die Abfrage stark verlangsamen.
   let scope;
   if (place.type === 'relation') {
-    scope = `area(id:${3600000000 + Number(place.id)})->.a;\nrel(area.a)["boundary"="administrative"]["admin_level"~"^(7|8|9|10|11)$"];`;
+    scope = `area(id:${3600000000 + Number(place.id)})->.a;\nrel(area.a)["boundary"="administrative"]["admin_level"~"^(9|10|11)$"];`;
   } else {
     const [s, n, w, e] = place.bbox;
     scope = `rel["boundary"="administrative"]["admin_level"~"^(9|10|11)$"](${s},${w},${n},${e});`;
   }
-  const data = await overpass(`[out:json][timeout:60];\n${scope}\nout geom;`);
+  const data = await overpass(`[out:json][timeout:25];\n${scope}\nout geom;`);
+  const [bs, bn, bw, be] = place.bbox;
   const levels = {};
   for (const el of data.elements || []) {
     if (el.type !== 'relation' || (place.type === 'relation' && el.id === Number(place.id))) continue;
     const geometry = relationToGeometry(el);
     if (!geometry) continue;
+    // Gebiete der Nachbarorte, die nur die Stadtgrenze berühren, weglassen
+    const ring = geometry.coordinates[0][0];
+    const cx = ring.reduce((a, p) => a + p[0], 0) / ring.length;
+    const cy = ring.reduce((a, p) => a + p[1], 0) / ring.length;
+    if (cx < bw || cx > be || cy < bs || cy > bn) continue;
     const lvl = el.tags?.admin_level || '?';
     (levels[lvl] ||= []).push({ id: el.id, name: el.tags?.name || 'Unbenannt', geometry });
   }
@@ -111,7 +137,7 @@ const NOT_STREETS = 'footway|path|cycleway|steps|track|service|platform|corridor
 /** Nächste benannte Straße zu einem Punkt: {name, dist} oder null */
 export async function nearestStreet(pt, radius = 250) {
   const q = `[out:json][timeout:20];way(around:${radius},${pt.lat},${pt.lng})["highway"]["name"]["highway"!~"^(${NOT_STREETS})$"];out tags geom;`;
-  const data = await overpass(q);
+  const data = await overpass(q, 20000);
   let best = null;
   for (const w of data.elements || []) {
     if (!w.geometry) continue;

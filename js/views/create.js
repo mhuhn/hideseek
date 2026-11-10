@@ -168,7 +168,7 @@ function step1(box) {
 
   const loadCity = async (place) => {
     S.city = place;
-    $('#results', box).innerHTML = '<span class="spinner"></span> Lade Stadtteile …';
+    $('#results', box).innerHTML = '<span class="spinner"></span> Lade Stadtteile von OpenStreetMap … (dauert bis zu 30 Sekunden)';
     const [s, n, w, e] = place.bbox;
     map.fitBounds([[s, w], [n, e]]);
     try {
@@ -183,7 +183,9 @@ function step1(box) {
       drawDistricts();
       if (districtLayer.getLayers().length) map.fitBounds(districtLayer.getBounds());
     } catch (err) {
-      $('#results', box).innerHTML = `<div class="banner warn">${esc(err.message)}</div>`;
+      $('#results', box).innerHTML = `<div class="banner warn">${esc(err.message)}
+        <div class="btn-row mt"><button class="btn small" data-retry>Nochmal versuchen</button></div></div>`;
+      $('[data-retry]', box).addEventListener('click', () => loadCity(place));
     }
     summary();
   };
