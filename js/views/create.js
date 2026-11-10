@@ -5,7 +5,7 @@ import { createMap, placeIcon, FIELD_STYLE } from '../mapview.js';
 import { searchPlaces, loadDistricts, reverseCity } from '../osm.js';
 
 const LEVEL_NAMES = { 7: 'Verbände', 8: 'Gemeinden', 9: 'Bezirke', 10: 'Stadtteile', 11: 'Viertel' };
-const STEP_TITLES = ['Grunddaten', 'Spielfeld', 'Orte', 'Regeln'];
+const STEP_TITLES = ['Grunddaten', 'Stadtteile', 'Eigene Gebiete', 'Orte', 'Regeln'];
 
 let S;          // Zustand des Assistenten
 let map = null;
@@ -42,10 +42,10 @@ function render() {
   main.innerHTML = `
     <h1>Spiel anlegen</h1>
     <div class="steps">${STEP_TITLES.map((_, i) => `<span class="${i <= S.step ? 'on' : ''}"></span>`).join('')}</div>
-    <div class="muted small" style="margin-bottom:10px">Schritt ${S.step + 1} von 4 · ${STEP_TITLES[S.step]}</div>
+    <div class="muted small" style="margin-bottom:10px">Schritt ${S.step + 1} von ${STEP_TITLES.length} · ${STEP_TITLES[S.step]}</div>
     <div id="step"></div>`;
   const box = $('#step', main);
-  [step0, step1, step2, step3][S.step](box);
+  [step0, stepDistricts, stepDraw, step2, step3][S.step](box);
   document.getElementById('main').scrollTo(0, 0);
 }
 
@@ -88,13 +88,22 @@ function step0(box) {
   });
 }
 
-// ------------------------------------------------------------- Schritt 2: Spielfeld
+// ------------------------------------------------------------- Schritt 2: Stadtteile
 
-function step1(box) {
-  const hasPM = !!(window.L && L.PM);
+const STYLE_SELECTED = { color: '#ff6b35', weight: 2, fillColor: '#ff6b35', fillOpacity: 0.35 };
+const STYLE_UNSELECTED = { color: '#1d2b53', weight: 1, fillColor: '#1d2b53', fillOpacity: 0.04, dashArray: '4 4' };
+
+function selectionText() {
+  const n = S.selected.size;
+  return n ? `${n} ${n === 1 ? 'Stadtteil' : 'Stadtteile'} ausgewählt` : 'Noch keine Stadtteile ausgewählt.';
+}
+
+function stepDistricts(box) {
   box.innerHTML = `
     <div class="card">
-      <h3>1. Stadt suchen und Stadtteile antippen</h3>
+      <h3>Stadtteile auswählen</h3>
+      <p class="muted small">Tippe auf der Karte die Stadtteile an, die zum Spielfeld gehören. Nochmal tippen hebt die Auswahl auf.
+        Eigene Gebiete zeichnest du im nächsten Schritt.</p>
       <form class="row" id="f-search">
         <input type="search" id="q" placeholder="Stadt oder Ort" value="${esc(S.city?.short || '')}" class="grow">
         <button class="btn" type="submit">Suchen</button>
@@ -103,74 +112,24 @@ function step1(box) {
       <div id="levels" class="row wrap mt"></div>
     </div>
     <div class="map" id="fmap"></div>
-    ${hasPM ? `
-    <div class="card mt">
-      <h3>2. Spielfeld mit eigenen Gebieten anpassen</h3>
-      <p class="muted small">Zeichne ein Gebiet, indem du Eckpunkte auf die Karte tippst. Zum Abschließen tippst du wieder auf den ersten Punkt.</p>
-      <div class="small" style="font-weight:700;margin-top:10px">Spielfeld ändern</div>
-      <div class="map-tools">
-        <button class="btn small" data-draw="add">+ Gebiet zum Spielfeld hinzufügen</button>
-        <button class="btn small red" data-draw="cut">− Gebiet aus dem Spielfeld herausnehmen</button>
-      </div>
-      <div class="small" style="font-weight:700">Gezeichnete Gebiete bearbeiten</div>
-      <div class="map-tools">
-        <button class="btn small ghost" data-tool="edit">Eckpunkte verschieben</button>
-        <button class="btn small ghost" data-tool="remove">Gezeichnetes Gebiet verwerfen</button>
-      </div>
-      <p class="muted small">„Verwerfen“ löscht nur deine Zeichnung wieder, egal ob sie etwas hinzugefügt oder herausgenommen hat.</p>
-      <div id="drawhint"></div>
-    </div>` : '<div class="banner warn mt">Das Zeichenwerkzeug konnte nicht geladen werden. Du kannst trotzdem Stadtteile auswählen.</div>'}
     <div id="summary" class="banner info mt"></div>
     <div class="btn-row mt">
       <button class="btn ghost" data-back>Zurück</button>
-      <button class="btn" data-next>Weiter</button>
+      <button class="btn" data-next>Weiter: eigene Gebiete</button>
     </div>`;
 
   map = createMap($('#fmap', box));
-
-  // Stadt, in der man gerade ist, direkt übernehmen und ihre Stadtteile laden
-  if (!S.city && !$('#q', box).value) {
-    navigator.geolocation?.getCurrentPosition(async (p) => {
-      try {
-        const place = await reverseCity({ lat: p.coords.latitude, lng: p.coords.longitude });
-        const q = $('#q', box);
-        if (place && q?.isConnected && !q.value && !S.city) {
-          q.value = place.short;
-          loadCity(place);
-        }
-      } catch { /* ohne Vorbelegung weiter */ }
-    }, () => {}, { timeout: 10000, maximumAge: 600000 });
-  }
   const districtLayer = L.featureGroup().addTo(map);
-  const drawnLayer = L.featureGroup().addTo(map);
-
-  const styleDistrict = (sel) => sel
-    ? { color: '#ff6b35', weight: 2, fillColor: '#ff6b35', fillOpacity: 0.35 }
-    : { color: '#1d2b53', weight: 1, fillColor: '#1d2b53', fillOpacity: 0.04, dashArray: '4 4' };
-  const styleDrawn = (kind) => kind === 'cut'
-    ? { color: '#d63a3a', weight: 2, fillColor: '#d63a3a', fillOpacity: 0.3, dashArray: '6 4' }
-    : { ...FIELD_STYLE, fillOpacity: 0.35, color: '#e2541f' };
-
-  const summary = () => {
-    const n = S.selected.size;
-    const a = drawnLayer.getLayers().filter((l) => l.hsKind !== 'cut').length;
-    const c = drawnLayer.getLayers().filter((l) => l.hsKind === 'cut').length;
-    const parts = [];
-    if (n) parts.push(`${n} ${n === 1 ? 'Gebiet' : 'Gebiete'} ausgewählt`);
-    if (a) parts.push(`${a} ${a === 1 ? 'Gebiet' : 'Gebiete'} hinzugefügt`);
-    if (c) parts.push(`${c} ${c === 1 ? 'Gebiet' : 'Gebiete'} herausgenommen`);
-    $('#summary', box).textContent = parts.length ? parts.join(' · ') : 'Noch kein Spielfeld festgelegt.';
-  };
+  const summary = () => { $('#summary', box).textContent = selectionText(); };
 
   const drawDistricts = () => {
     districtLayer.clearLayers();
-    const list = S.levels[S.level] || [];
-    for (const d of list) {
-      const lay = L.geoJSON(d.geometry, { style: styleDistrict(S.selected.has(d.id)), pmIgnore: true });
+    for (const d of S.levels[S.level] || []) {
+      const lay = L.geoJSON(d.geometry, { style: S.selected.has(d.id) ? STYLE_SELECTED : STYLE_UNSELECTED, pmIgnore: true });
       lay.bindTooltip(esc(d.name), { sticky: true, className: 'map-label' });
       lay.on('click', () => {
         if (S.selected.has(d.id)) S.selected.delete(d.id); else S.selected.add(d.id);
-        lay.setStyle(styleDistrict(S.selected.has(d.id)));
+        lay.setStyle(S.selected.has(d.id) ? STYLE_SELECTED : STYLE_UNSELECTED);
         summary();
       });
       lay.addTo(districtLayer);
@@ -192,16 +151,18 @@ function step1(box) {
     map.fitBounds([[s, w], [n, e]]);
     try {
       S.levels = await loadDistricts(place);
+      if (!box.isConnected) return;
       const lv = Object.keys(S.levels);
       S.level = ['10', '9', '11', '8'].find((l) => (S.levels[l]?.length || 0) >= 2) || lv[0] || null;
       S.selected = new Set();
       $('#results', box).innerHTML = lv.length
-        ? '<p class="small muted">Tippe die Gebiete an, die zum Spielfeld gehören sollen.</p>'
-        : '<div class="banner warn">Für diesen Ort sind keine Stadtteilgrenzen hinterlegt. Zeichne das Spielfeld bitte selbst.</div>';
+        ? ''
+        : '<div class="banner warn">Für diesen Ort sind keine Stadtteilgrenzen hinterlegt. Zeichne das Spielfeld im nächsten Schritt selbst.</div>';
       drawLevels();
       drawDistricts();
       if (districtLayer.getLayers().length) map.fitBounds(districtLayer.getBounds());
     } catch (err) {
+      if (!box.isConnected) return;
       $('#results', box).innerHTML = `<div class="banner warn">${esc(err.message)}
         <div class="btn-row mt"><button class="btn small" data-retry>Nochmal versuchen</button></div></div>`;
       $('[data-retry]', box).addEventListener('click', () => loadCity(place));
@@ -209,21 +170,26 @@ function step1(box) {
     summary();
   };
 
-  // vorhandenen Zustand wiederherstellen
-  if (S.city) {
-    const [s, n, w, e] = S.city.bbox;
-    map.fitBounds([[s, w], [n, e]]);
+  // Stadt, in der man gerade ist, direkt übernehmen und ihre Stadtteile laden
+  if (!S.city) {
+    navigator.geolocation?.getCurrentPosition(async (p) => {
+      try {
+        const place = await reverseCity({ lat: p.coords.latitude, lng: p.coords.longitude });
+        const q = $('#q', box);
+        if (place && q?.isConnected && !q.value && !S.city) {
+          q.value = place.short;
+          loadCity(place);
+        }
+      } catch { /* ohne Vorbelegung weiter */ }
+    }, () => {}, { timeout: 10000, maximumAge: 600000 });
   }
+
+  // vorhandenen Zustand wiederherstellen
   drawLevels();
   drawDistricts();
-  for (const [kind, list] of [['add', S.adds], ['cut', S.cuts]]) {
-    for (const g of list) {
-      L.geoJSON(g, { style: styleDrawn(kind) }).eachLayer((l) => { l.hsKind = kind; drawnLayer.addLayer(l); });
-    }
-  }
-  const all = L.featureGroup([...districtLayer.getLayers(), ...drawnLayer.getLayers()]);
-  if (all.getLayers().length) map.fitBounds(all.getBounds());
-  else if (!S.city) locateRoughly(map);
+  if (districtLayer.getLayers().length) map.fitBounds(districtLayer.getBounds());
+  else if (S.city) { const [s, n, w, e] = S.city.bbox; map.fitBounds([[s, w], [n, e]]); }
+  else locateRoughly(map);
   summary();
 
   $('#f-search', box).addEventListener('submit', (e) => {
@@ -249,6 +215,73 @@ function step1(box) {
     S.selected = new Set();
     drawLevels(); drawDistricts(); summary();
   });
+
+  $('[data-back]', box).addEventListener('click', () => go(0));
+  $('[data-next]', box).addEventListener('click', () => go(2));
+}
+
+// ------------------------------------------------------------- Schritt 3: eigene Gebiete
+
+function stepDraw(box) {
+  const hasPM = !!(window.L && L.PM);
+  box.innerHTML = `
+    <div class="card">
+      <h3>Eigene Gebiete zeichnen</h3>
+      <p class="muted small">Optional: Ergänze oder verkleinere das Spielfeld mit eigenen Gebieten. Tippe dazu erst auf einen der Knöpfe,
+        dann Eckpunkte auf die Karte. Zum Abschließen tippst du wieder auf den ersten Punkt.
+        Die ausgewählten Stadtteile sind hier nur zur Orientierung zu sehen; ändern kannst du sie einen Schritt zurück.</p>
+      ${hasPM ? `
+      <div class="small" style="font-weight:700;margin-top:10px">Spielfeld ändern</div>
+      <div class="map-tools">
+        <button class="btn small" data-draw="add">+ Gebiet zum Spielfeld hinzufügen</button>
+        <button class="btn small red" data-draw="cut">− Gebiet aus dem Spielfeld herausnehmen</button>
+      </div>
+      <div class="small" style="font-weight:700">Gezeichnete Gebiete bearbeiten</div>
+      <div class="map-tools">
+        <button class="btn small ghost" data-tool="edit">Eckpunkte verschieben</button>
+        <button class="btn small ghost" data-tool="remove">Gezeichnetes Gebiet verwerfen</button>
+      </div>
+      <p class="muted small">„Verwerfen“ löscht nur deine Zeichnung wieder, egal ob sie etwas hinzugefügt oder herausgenommen hat.</p>`
+      : '<div class="banner warn">Das Zeichenwerkzeug konnte nicht geladen werden.</div>'}
+      <div id="drawhint"></div>
+    </div>
+    <div class="map" id="fmap"></div>
+    <div id="summary" class="banner info mt"></div>
+    <div class="btn-row mt">
+      <button class="btn ghost" data-back>Zurück: Stadtteile</button>
+      <button class="btn" data-next>Weiter</button>
+    </div>`;
+
+  map = createMap($('#fmap', box));
+  // Stadtteile nur als Vorschau – nicht anklickbar, damit Klicks beim Zeichnen ankommen
+  const preview = L.featureGroup().addTo(map);
+  for (const d of (S.levels[S.level] || []).filter((x) => S.selected.has(x.id))) {
+    L.geoJSON(d.geometry, { style: { ...STYLE_SELECTED, fillOpacity: 0.2 }, interactive: false, pmIgnore: true }).addTo(preview);
+  }
+  const drawnLayer = L.featureGroup().addTo(map);
+  const styleDrawn = (kind) => kind === 'cut'
+    ? { color: '#d63a3a', weight: 2, fillColor: '#d63a3a', fillOpacity: 0.3, dashArray: '6 4' }
+    : { color: '#1d2b53', weight: 2, fillColor: '#ff6b35', fillOpacity: 0.35 };
+
+  const summary = () => {
+    const a = drawnLayer.getLayers().filter((l) => l.hsKind !== 'cut').length;
+    const c = drawnLayer.getLayers().filter((l) => l.hsKind === 'cut').length;
+    const parts = [selectionText()];
+    if (a) parts.push(`${a} ${a === 1 ? 'Gebiet' : 'Gebiete'} hinzugefügt`);
+    if (c) parts.push(`${c} ${c === 1 ? 'Gebiet' : 'Gebiete'} herausgenommen`);
+    $('#summary', box).textContent = parts.join(' · ');
+  };
+
+  for (const [kind, list] of [['add', S.adds], ['cut', S.cuts]]) {
+    for (const g of list) {
+      L.geoJSON(g, { style: styleDrawn(kind) }).eachLayer((l) => { l.hsKind = kind; drawnLayer.addLayer(l); });
+    }
+  }
+  const all = L.featureGroup([...preview.getLayers(), ...drawnLayer.getLayers()]);
+  if (all.getLayers().length) map.fitBounds(all.getBounds());
+  else if (S.city) { const [s, n, w, e] = S.city.bbox; map.fitBounds([[s, w], [n, e]]); }
+  else locateRoughly(map);
+  summary();
 
   if (hasPM) {
     let drawKind = 'add';
@@ -276,6 +309,7 @@ function step1(box) {
         $('#drawhint', box).innerHTML = `<div class="banner ${drawKind === 'cut' ? 'danger' : 'info'}">
           ${drawKind === 'cut' ? 'Gebiet aus dem Spielfeld herausnehmen' : 'Gebiet zum Spielfeld hinzufügen'}: Eckpunkte setzen, zum Abschließen auf den ersten Punkt tippen.
           <button class="btn small ghost mt" data-stopdraw>Abbrechen</button></div>`;
+        $('#fmap', box).scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
       if (e.target.closest('[data-stopdraw]')) { map.pm.disableDraw(); $('#drawhint', box).innerHTML = ''; }
       if (t?.dataset.tool === 'edit') {
@@ -296,15 +330,19 @@ function step1(box) {
   }
 
   const save = () => {
-    if (hasPM) { map.pm.disableDraw(); if (map.pm.globalEditModeEnabled()) map.pm.disableGlobalEditMode(); }
+    if (hasPM) {
+      map.pm.disableDraw();
+      if (map.pm.globalEditModeEnabled()) map.pm.disableGlobalEditMode();
+      if (map.pm.globalRemovalModeEnabled()) map.pm.disableGlobalRemovalMode();
+    }
     S.adds = []; S.cuts = [];
     drawnLayer.eachLayer((l) => (l.hsKind === 'cut' ? S.cuts : S.adds).push(l.toGeoJSON(6).geometry));
   };
-  $('[data-back]', box).addEventListener('click', () => { save(); go(0); });
+  $('[data-back]', box).addEventListener('click', () => { save(); go(1); });
   $('[data-next]', box).addEventListener('click', () => {
     save();
-    if (!S.selected.size && !S.adds.length) { toast('Bitte wähle Stadtteile aus oder füge ein gezeichnetes Gebiet hinzu.', 'error'); return; }
-    go(2);
+    if (!S.selected.size && !S.adds.length) { toast('Wähle Stadtteile aus (einen Schritt zurück) oder füge ein gezeichnetes Gebiet hinzu.', 'error'); return; }
+    go(3);
   });
 }
 
@@ -386,12 +424,12 @@ function step2(box) {
   });
 
   const save = () => { S.landmark = $('#landmark', box).value.trim(); };
-  $('[data-back]', box).addEventListener('click', () => { save(); go(1); });
+  $('[data-back]', box).addEventListener('click', () => { save(); go(2); });
   $('[data-next]', box).addEventListener('click', () => {
     save();
     const bad = S.places.find((p) => (p.name.trim() && p.lat == null) || (!p.name.trim() && p.lat != null));
     if (bad) { toast('Jeder Ort braucht einen Namen und einen Punkt auf der Karte.', 'error'); return; }
-    go(3);
+    go(4);
   });
 }
 
@@ -422,7 +460,7 @@ function step3(box) {
     const inp = $('#' + id, box);
     inp.addEventListener('input', () => { $('#' + id + '-o', box).textContent = `${inp.value} ${unit}`; S[id] = +inp.value; });
   }
-  $('[data-back]', box).addEventListener('click', () => go(2));
+  $('[data-back]', box).addEventListener('click', () => go(3));
   $('[data-create]', box).addEventListener('click', (e) => busy(e.currentTarget, createGame));
 }
 
