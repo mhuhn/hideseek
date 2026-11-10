@@ -2,7 +2,7 @@
 
 Statische PWA (HTML/CSS/JS-Module ohne Build), ausgeliefert über GitHub Pages von `main` / Root. Backend: Supabase-Projekt „hideseek“.
 
-- Bei Änderungen an App-Dateien `CACHE` in `sw.js` hochzählen.
+- Bei Änderungen an App-Dateien `CACHE` in `sw.js` und `VERSION`/`VERSION_DATE` in `js/version.js` hochzählen (Startseite zeigt die Version).
 - Datenbank: `supabase/migrations/`. Interne Funktionen im Schema `hs`, öffentliche RPCs in `public`; Tabellen haben RLS ohne Policies.
 - Oberer Rand (iOS-PWA vom Homescreen), bewährt aus mhuhn/voka und mhuhn/tourwetter:
   Statusleiste `default` (nicht `black-translucent`); `html`-Hintergrund = Kopfleistenfarbe = `theme-color` =

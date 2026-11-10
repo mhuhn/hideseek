@@ -1,5 +1,6 @@
 import { rpc } from '../sb.js';
 import { esc, store } from '../ui.js';
+import { VERSION, VERSION_DATE } from '../version.js';
 
 export async function mount(main) {
   main.innerHTML = `
@@ -18,7 +19,8 @@ export async function mount(main) {
       <p>Eine Partei versteckt sich im Spielfeld, die anderen suchen. Die Sucher stellen über die App Fragen
         und bezahlen mit Münzen. Die Hider würfeln mit den Münzen Blockaden, die die Sucher aufhalten.
         Je länger die Suche dauert, desto mehr Minuten bekommen die Hider. Wer am Ende die meisten Minuten hat, gewinnt.</p>
-    </div>`;
+    </div>
+    <p class="center small muted">Version ${VERSION} · ${VERSION_DATE}</p>`;
 
   const last = store.get('lastGame');
   if (!last) return;
