@@ -96,7 +96,7 @@ function step1(box) {
     <div class="card">
       <h3>1. Stadt suchen und Stadtteile antippen</h3>
       <form class="row" id="f-search">
-        <input type="search" id="q" placeholder="Stadt oder Ort" value="${esc(S.city?.short || S.cityGuess || '')}" class="grow">
+        <input type="search" id="q" placeholder="Stadt oder Ort" value="${esc(S.city?.short || '')}" class="grow">
         <button class="btn" type="submit">Suchen</button>
       </form>
       <div id="results" class="mt"></div>
@@ -128,13 +128,16 @@ function step1(box) {
 
   map = createMap($('#fmap', box));
 
-  // Ortssuche mit der Stadt vorbelegen, in der man gerade ist
+  // Stadt, in der man gerade ist, direkt übernehmen und ihre Stadtteile laden
   if (!S.city && !$('#q', box).value) {
     navigator.geolocation?.getCurrentPosition(async (p) => {
       try {
-        const name = await reverseCity({ lat: p.coords.latitude, lng: p.coords.longitude });
+        const place = await reverseCity({ lat: p.coords.latitude, lng: p.coords.longitude });
         const q = $('#q', box);
-        if (name && q?.isConnected && !q.value) { q.value = name; S.cityGuess = name; }
+        if (place && q?.isConnected && !q.value && !S.city) {
+          q.value = place.short;
+          loadCity(place);
+        }
       } catch { /* ohne Vorbelegung weiter */ }
     }, () => {}, { timeout: 10000, maximumAge: 600000 });
   }
